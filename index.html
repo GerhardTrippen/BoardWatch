@@ -65,9 +65,10 @@
     .board-row.conflict { border-color: var(--red); background: var(--red-bg); }
     .brd-n { font-family: 'JetBrains Mono', monospace; font-size: 36px; font-weight: 700; color: var(--gold); width: 52px; text-align: center; flex-shrink: 0; }
     .brd-players { flex: 1; min-width: 0; line-height: 1.5; }
-    .brd-p { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .brd-p.w::before { content: "□ "; color: var(--cream); font-size: 14px; }
-    .brd-p.bk::before { content: "■ "; color: var(--green); font-size: 14px; }
+    .brd-p { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+    .brd-p::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .brd-p.w::before { background: #fff; }
+    .brd-p.bk::before { background: #222; border: 1.5px solid #888; }
     .brd-meta { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
     .ill-badge { font-family: 'JetBrains Mono', monospace; font-size: 15px; padding: 3px 8px; border-radius: 4px; background: var(--red-bg); color: var(--red); font-weight: 700; }
     .res-badge { font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700; padding: 4px 8px; border-radius: 4px; }
@@ -82,7 +83,10 @@
     .detail-section { font-size: 14px; color: var(--text2); }
     .player-row { display: flex; align-items: center; justify-content: space-between; padding: 16px; background: var(--surface2); border-radius: 8px; margin-bottom: 10px; }
     .pl-info { flex: 1; min-width: 0; }
-    .pl-color { font-size: 13px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; font-family: 'JetBrains Mono', monospace; }
+    .pl-color { font-size: 13px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; font-family: 'JetBrains Mono', monospace; display: flex; align-items: center; gap: 6px; }
+    .color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
+    .white-dot { background: #fff; }
+    .black-dot { background: #222; border: 1.5px solid #888; }
     .pl-name { font-size: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .pl-rating { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--text2); }
     .ill-ctrl { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -134,6 +138,7 @@
     .toggle input:checked + .toggle-track { background: var(--gold-bg); border-color: var(--gold); }
     .toggle input:checked + .toggle-track::after { left: 26px; background: var(--gold); }
     .err-box { background: var(--red-bg); border: 1px solid var(--red); border-radius: 8px; padding: 14px; margin-bottom: 14px; font-size: 13px; color: var(--red); font-family: 'JetBrains Mono', monospace; word-break: break-all; }
+    .empty-msg { text-align: center; padding: 40px 20px; color: var(--text2); font-size: 16px; }
     .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
     .conn-dot.ok { background: var(--green); }
     .conn-dot.fail { background: var(--red); }
@@ -519,7 +524,7 @@
       const Filters = () => (
         <div>
           <div className="toggle-bar">
-            <div className="toggle-label">{showAll ? <span>Showing <b>all</b> games</span> : <span>Showing <b>pending</b> only</span>}</div>
+            <div className="toggle-label">{showAll ? <span>Showing <b>all {stats.total}</b> games</span> : <span>Showing <b>{stats.total - stats.done} pending</b></span>}</div>
             <label className="toggle">
               <input type="checkbox" checked={showAll} onChange={() => setShowAll(!showAll)} />
               <span className="toggle-track" />
@@ -617,6 +622,7 @@
                 </div>
               ))}
               <div className="boards">
+                {grouped.length === 0 && !showAll && <div className="empty-msg">All games complete! Toggle "Show all" to review.</div>}
                 {grouped.map((item, i) => item.t === "h"
                   ? <div key={`h-${i}`} className="sec-divider">{item.section}</div>
                   : <BoardRow key={item.board.id} b={item.board} showConf={true} />
@@ -649,6 +655,7 @@
               <div className="stats"><div className="stat"><div className="stat-v">{stats.done}/{stats.total}</div><div className="stat-l">Complete</div></div></div>
               <Filters />
               <div className="boards">
+                {grouped.length === 0 && !showAll && <div className="empty-msg">All games complete!</div>}
                 {grouped.map((item, i) => item.t === "h"
                   ? <div key={`h-${i}`} className="sec-divider">{item.section}</div>
                   : <BoardRow key={item.board.id} b={item.board} showConf={false} />
@@ -670,7 +677,7 @@
                     {b.result && <span className={`res-badge ${resClass(b.result)}`}>{resLabel(b.result)}</span>}
                   </div>
                   <div className="player-row">
-                    <div className="pl-info"><div className="pl-color">□ White</div><div className="pl-name">{b.white_name}</div><div className="pl-rating">{b.white_rating}</div></div>
+                    <div className="pl-info"><div className="pl-color"><span className="color-dot white-dot"></span> White</div><div className="pl-name">{b.white_name}</div><div className="pl-rating">{b.white_rating}</div></div>
                     <div className="ill-ctrl">
                       <button className="undo" disabled={!b.white_illegal_moves} onClick={() => undoIll(b, "white")}>−</button>
                       <div className="ill-count">{b.white_illegal_moves || 0}</div>
@@ -678,7 +685,7 @@
                     </div>
                   </div>
                   <div className="player-row">
-                    <div className="pl-info"><div className="pl-color">■ Black</div><div className="pl-name">{b.black_name}</div><div className="pl-rating">{b.black_rating}</div></div>
+                    <div className="pl-info"><div className="pl-color"><span className="color-dot black-dot"></span> Black</div><div className="pl-name">{b.black_name}</div><div className="pl-rating">{b.black_rating}</div></div>
                     <div className="ill-ctrl">
                       <button className="undo" disabled={!b.black_illegal_moves} onClick={() => undoIll(b, "black")}>−</button>
                       <div className="ill-count">{b.black_illegal_moves || 0}</div>
