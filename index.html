@@ -21,9 +21,9 @@
       --blue: #80b0e8; --blue-bg: rgba(128,176,232,0.15);
       --draw-c: #c8c5b8; --draw-bg: rgba(200,197,184,0.18);
     }
-    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
-    #root { max-width: 460px; margin: 0 auto; min-height: 100vh; padding: 12px 14px; }
-    .hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+    #root { max-width: 460px; margin: 0 auto; min-height: 100vh; padding: 12px 14px; overflow-x: hidden; }
+    .hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 14px; position: sticky; top: 0; background: var(--bg); z-index: 10; }
     .hdr-left { display: flex; align-items: center; gap: 8px; }
     .logo { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; }
     .logo b { color: var(--gold); } .logo span { color: var(--text3); font-weight: 400; }
@@ -44,8 +44,8 @@
     .pin-box { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 14px; text-align: center; margin-bottom: 14px; }
     .pin-code { font-family: 'JetBrains Mono', monospace; font-size: 40px; font-weight: 700; color: var(--gold); letter-spacing: 12px; }
     .pin-hint { font-size: 13px; color: var(--text2); margin-top: 3px; }
-    .pin-row { display: flex; gap: 8px; margin-bottom: 12px; }
-    .pin-input { flex: 1; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 26px; text-align: center; letter-spacing: 10px; outline: none; }
+    .pin-row { display: flex; gap: 8px; margin-bottom: 12px; max-width: 100%; }
+    .pin-input { flex: 1; min-width: 0; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 26px; text-align: center; letter-spacing: 10px; outline: none; }
     .pin-input:focus { border-color: var(--gold); }
     .pin-input::placeholder { color: var(--text3); letter-spacing: 4px; font-size: 16px; }
     .name-input { width: 100%; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 16px; outline: none; margin-bottom: 14px; font-family: 'DM Sans', sans-serif; }
@@ -235,6 +235,9 @@
       async clearResultEntries(boardId) {
         await supa("DELETE", "result_entries", `?board_id=eq.${boardId}`);
       },
+      async clearArbiterEntries(boardId, arbiter) {
+        await supa("DELETE", "result_entries", `?board_id=eq.${boardId}&arbiter=eq.${encodeURIComponent(arbiter)}`);
+      },
       async getOriginalSJSON(tournamentId) {
         const rows = await supa("GET", "tournaments", `?id=eq.${tournamentId}&select=original_sjson`);
         return rows?.[0]?.original_sjson || null;
@@ -247,14 +250,21 @@
     function parseSJSONFile(text) {
       const data = JSON.parse(text);
       if (!data.Sections || !data.Overview) throw new Error("Not a valid SwissSys SJSON file");
-      const firstSec = data.Sections[0];
-      const roundsPaired = firstSec["Rounds paired"] || 0;
-      const roundsPlayed = firstSec["Rounds played"] || 0;
-      const activeRound = roundsPaired > roundsPlayed ? roundsPaired : roundsPlayed;
+      // Determine active round from the highest "Rounds paired" across all sections
+      let activeRound = 0;
+      for (const s of data.Sections) {
+        const rp = s["Rounds paired"] || 0;
+        const rpl = s["Rounds played"] || 0;
+        const ar = rp > rpl ? rp : rpl;
+        if (ar > activeRound) activeRound = ar;
+      }
+      if (activeRound === 0) activeRound = 1;
       const roundIdx = activeRound - 1;
       const allBoards = [];
       for (const section of data.Sections) {
         const boardMap = {};
+        const pendingPairs = []; // for ~ entries with board=0
+        const firstBoard = section["First board"] || 1;
         for (const player of section.Players || []) {
           const results = player.Results || [];
           if (!results[roundIdx]) continue;
@@ -262,10 +272,36 @@
           if (parts.length < 4) continue;
           const rc = parts[0], opp = parseInt(parts[1]) || 0;
           const color = parts[2], board = parseInt(parts[3]) || 0;
-          if (board <= 0 || opp <= 0 || rc === "B" || rc === "U") continue;
-          const side = color === "W" ? "white" : "black";
-          if (!boardMap[board]) boardMap[board] = { section: section["Section name"] };
-          boardMap[board][side] = { name: player.Name, pairNum: player["Pair number"], id: player.ID, rating: player.Rating || 0, rc };
+          if (opp <= 0 || rc === "B" || rc === "U") continue;
+          const pdata = { name: player.Name, pairNum: player["Pair number"], id: player.ID, rating: player.Rating || 0, rc };
+          if (board > 0) {
+            const side = color === "W" ? "white" : "black";
+            if (!boardMap[board]) boardMap[board] = { section: section["Section name"] };
+            boardMap[board][side] = pdata;
+          } else {
+            // Paired but board not yet assigned (~ entries or similar)
+            pendingPairs.push({ ...pdata, color, opp });
+          }
+        }
+        // If no boards found, reconstruct from pending pairs
+        if (Object.keys(boardMap).length === 0 && pendingPairs.length > 0) {
+          const matched = new Set();
+          let boardNum = firstBoard;
+          for (const p of pendingPairs) {
+            if (matched.has(p.pairNum)) continue;
+            const partner = pendingPairs.find(x => x.pairNum === p.opp);
+            if (!partner) continue;
+            matched.add(p.pairNum);
+            matched.add(partner.pairNum);
+            const wp = p.color === "W" ? p : partner;
+            const bp = p.color === "B" ? p : partner;
+            boardMap[boardNum] = {
+              section: section["Section name"],
+              white: { name: wp.name, pairNum: wp.pairNum, id: wp.id, rating: wp.rating, rc: wp.rc },
+              black: { name: bp.name, pairNum: bp.pairNum, id: bp.id, rating: bp.rating, rc: bp.rc },
+            };
+            boardNum++;
+          }
         }
         for (const [bn, info] of Object.entries(boardMap)) {
           if (info.white && info.black) {
@@ -291,7 +327,7 @@
       return {
         name: data.Overview["Tournament title"] || "Tournament",
         timeControl: data.Overview["Tournament time controls"] || "",
-        activeRound, totalRounds: firstSec["Final round"] || 6,
+        activeRound, totalRounds: data.Sections[0]["Final round"] || 6,
         boards: allBoards,
         sections: data.Sections.map(s => s["Section name"]),
       };
@@ -300,8 +336,16 @@
     function buildExportSJSON(origText, boards, activeRound) {
       const data = JSON.parse(origText);
       const roundIdx = activeRound - 1;
+      // Lookup by board number (for sections with assigned boards)
       const rmap = {};
       for (const b of boards) { if (b.result) rmap[b.board_number] = b; }
+      // Lookup by player ID (for sections where board=0 in original SJSON)
+      const pidmap = {};
+      for (const b of boards) {
+        if (!b.result) continue;
+        pidmap[b.white_id] = { result: b.result, color: "W" };
+        pidmap[b.black_id] = { result: b.result, color: "B" };
+      }
       for (const sec of data.Sections) {
         for (const pl of sec.Players || []) {
           const res = pl.Results || [];
@@ -309,16 +353,24 @@
           const p = res[roundIdx].split(";");
           if (p.length < 4) continue;
           const brd = parseInt(p[3]) || 0, clr = p[2];
-          if (brd <= 0) continue;
-          const bd = rmap[brd];
+          // Try board number first, then fall back to player ID
+          let bd = brd > 0 ? rmap[brd] : null;
+          let useClr = clr;
+          if (!bd && pidmap[pl.ID]) {
+            // Match by player ID for sections with board=0
+            const pm = pidmap[pl.ID];
+            // Find the board data via any board containing this player
+            bd = boards.find(b => b.result && (b.white_id === pl.ID || b.black_id === pl.ID));
+            useClr = pm.color;
+          }
           if (!bd || !bd.result) continue;
           let c;
           const r = bd.result;
-          if (r === "1-0") c = clr === "W" ? "+" : "-";
-          else if (r === "0-1") c = clr === "W" ? "-" : "+";
+          if (r === "1-0") c = useClr === "W" ? "+" : "-";
+          else if (r === "0-1") c = useClr === "W" ? "-" : "+";
           else if (r === "½-½") c = "=";
-          else if (r === "1-0F") c = clr === "W" ? "X" : "F";
-          else if (r === "0-1F") c = clr === "W" ? "F" : "X";
+          else if (r === "1-0F") c = useClr === "W" ? "X" : "F";
+          else if (r === "0-1F") c = useClr === "W" ? "F" : "X";
           if (c) { p[0] = c; pl.Results[roundIdx] = p.join(";"); }
         }
       }
@@ -484,12 +536,16 @@
       const enterRes = async (b, result) => {
         const arb = arbName || "Arbiter";
         try {
+          // Clear this arbiter's previous entry (self-correction)
+          await db.clearArbiterEntries(b.id, arb);
           await db.addResultEntry({ board_id: b.id, arbiter: arb, result });
           await db.updateBoard(b.id, { result });
           await refresh();
+          // Check for conflict from OTHER arbiters only
           const ent = entries[b.id] || [];
-          const uniq = [...new Set([...ent.map(e => e.result), result])];
-          if (uniq.length > 1) flash("⚠ CONFLICT!", "err");
+          const otherResults = ent.filter(e => e.arbiter !== arb).map(e => e.result);
+          const hasConflict = otherResults.some(r => r !== result);
+          if (hasConflict) flash("⚠ CONFLICT — different arbiter disagrees!", "err");
           else flash(`Board ${b.board_number}: ${resLabel(result)}`, "ok");
         } catch (err) { flash("Error: " + err.message, "err"); }
       };
