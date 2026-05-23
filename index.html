@@ -261,6 +261,7 @@
       if (activeRound === 0) activeRound = 1;
       const roundIdx = activeRound - 1;
       const allBoards = [];
+      const estimatedSections = [];
       for (const section of data.Sections) {
         const boardMap = {};
         const pendingPairs = []; // for ~ entries with board=0
@@ -283,8 +284,9 @@
             pendingPairs.push({ ...pdata, color, opp });
           }
         }
-        // If no boards found, reconstruct from pending pairs
+        // If no boards found, reconstruct from pending pairs (board numbers will be ESTIMATED)
         if (Object.keys(boardMap).length === 0 && pendingPairs.length > 0) {
+          estimatedSections.push(section["Section name"]);
           const matched = new Set();
           let boardNum = firstBoard;
           for (const p of pendingPairs) {
@@ -330,6 +332,7 @@
         activeRound, totalRounds: data.Sections[0]["Final round"] || 6,
         boards: allBoards,
         sections: data.Sections.map(s => s["Section name"]),
+        estimatedSections,
       };
     }
 
@@ -398,6 +401,7 @@
       const [meta, setMeta] = useState(null);
       const [boards, setBoards] = useState([]);
       const [entries, setEntries] = useState({});
+      const [estSections, setEstSections] = useState([]);
       const [pinInput, setPinInput] = useState("");
       const [tdPinInput, setTdPinInput] = useState("");
       const [tdAuth, setTdAuth] = useState(false);
@@ -456,8 +460,12 @@
           const rows = parsed.boards.map(b => ({ tournament_id: t.id, ...b }));
           await db.createBoards(rows);
           setMeta(t);
+          setEstSections(parsed.estimatedSections || []);
           setScreen("td-dashboard");
-          flash(`${parsed.boards.length} boards → database`, "ok");
+          const warn = parsed.estimatedSections.length > 0
+            ? ` ⚠ ${parsed.estimatedSections.length} section(s) have unconfirmed board numbers`
+            : "";
+          flash(`${parsed.boards.length} boards → database${warn}`, parsed.estimatedSections.length > 0 ? "err" : "ok");
         } catch (err) { flash("Error: " + err.message, "err"); setDbErr(err.message); }
         setLoading(false);
       };
@@ -587,10 +595,11 @@
 
       const BoardRow = ({ b, showConf }) => {
         const isC = showConf && conflicts.some(c => c.board.id === b.id);
+        const isEst = estSections.includes(b.section);
         return (
           <div className={`board-row ${b.result ? "done" : ""} ${isC ? "conflict" : ""}`}
             onClick={() => { setSelBoard(b); setScreen("board-detail"); }}>
-            <div className="brd-n">{b.board_number}</div>
+            <div className="brd-n" style={isEst ? { color: "#e8c840", fontSize: 24 } : {}}>{isEst ? "?" : b.board_number}</div>
             <div className="brd-players">
               <div className="brd-p w">{b.white_name}</div>
               <div className="brd-p bk">{b.black_name}</div>
@@ -611,6 +620,14 @@
 
       const Filters = () => (
         <div>
+          {estSections.length > 0 && (
+            <div className="conflict-banner" style={{ borderColor: "#e8c840", background: "rgba(232,200,64,0.1)" }}>
+              <h3 style={{ color: "#e8c840" }}>⚠ Board numbers unconfirmed</h3>
+              <p style={{ color: "var(--text2)", fontSize: 13 }}>
+                <b>{estSections.join(", ")}</b> — SwissSys did not assign board numbers. Boards shown as <b>?</b> may not match the printed sheet. Verify with TD.
+              </p>
+            </div>
+          )}
           <div className="toggle-bar">
             <div className="toggle-label">{showAll ? <span>Showing <b>all {stats.total}</b> games</span> : <span>Showing <b>{stats.total - stats.done} pending</b></span>}</div>
             <label className="toggle">
@@ -623,7 +640,7 @@
               <button className={`res-btn filter-btn ${secFilter === "all" ? "active" : ""}`} onClick={() => setSecFilter("all")}>All</button>
               {sections.map(s => (
                 <button key={s} className={`res-btn filter-btn ${secFilter === s ? "active" : ""}`}
-                  onClick={() => setSecFilter(s)}>{s.replace(" Section", "")}</button>
+                  onClick={() => setSecFilter(s)}>{s.replace(" Section", "").replace(" section", "")}</button>
               ))}
             </div>
           )}
@@ -778,7 +795,7 @@
               <div>
                 <div className="detail">
                   <div className="detail-hdr">
-                    <div><div className="detail-title">Board {b.board_number}</div><div className="detail-section">{b.section}</div></div>
+                    <div><div className="detail-title">{estSections.includes(b.section) ? "Board ?" : `Board ${b.board_number}`}</div><div className="detail-section">{b.section}{estSections.includes(b.section) ? " — board # unconfirmed" : ""}</div></div>
                     {b.result && <span className={`res-badge ${resClass(b.result)}`}>{resLabel(b.result)}</span>}
                   </div>
                   <div className="player-row">
